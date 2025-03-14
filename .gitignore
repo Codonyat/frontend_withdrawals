@@ -1,0 +1,11 @@
+.github/
+.vscode/
+
+# Dotenv file
+.env
+
+# Node modules
+node_modules/
+
+# Others
+public/ethers.min.js
