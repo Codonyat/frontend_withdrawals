@@ -1,7 +1,7 @@
 // Contracts
 const CONTRACTS = {
   vault: "0xB91AE2c8365FD45030abA84a4666C4dB074E53E7",
-  sir: "0x1278B112943Abc025a0DF081Ee42369414c3A834 ",
+  sir: "0x1278B112943Abc025a0DF081Ee42369414c3A834",
   apeImplementation: "0x8E3a5ec5a8B23Fd169F38C9788B19e72aEd97b5A",
 };
 
@@ -31,9 +31,10 @@ async function scanPositions(address) {
       tea: [],
       ape: [],
       sir: {
-        staked: 0n,
+        stakedLocked: 0n,
+        stakedUnlocked: 0n,
         dividends: 0n,
-        lper: 0n,
+        lper: [],
         contributor: 0n,
       },
     };
@@ -44,8 +45,9 @@ async function scanPositions(address) {
       [
         "function paramsById(uint48) view returns (tuple(address,address,int8))",
         "function numberOfVaults() view returns (uint48)",
-        "function balanceOf(address,uint256) view returns (uint256)",
-        "function unclaimedRewards(uint256,address) view returns (uint80)",
+        "function balanceOf(address,uint) view returns (uint)",
+        "function unclaimedRewards(uint,address) view returns (uint80)",
+        "function uri(uint) view returns (string)",
       ],
       provider
     );
@@ -63,7 +65,8 @@ async function scanPositions(address) {
     // Scan vaults
     const numVaults = await vault.numberOfVaults();
 
-    for (let vaultId = 1n; vaultId <= numVaults; vaultId++) {
+    // for (let vaultId = 1n; vaultId <= numVaults; vaultId++) {
+    for (let vaultId = 1n; vaultId <= 1; vaultId++) {
       const params = await vault.paramsById(vaultId);
 
       // TEA Balance (ERC1155)
@@ -71,35 +74,49 @@ async function scanPositions(address) {
       if (teaBalance > 0n) {
         results.tea.push({
           vaultId: Number(vaultId),
-          collateral: params[1],
-          balance: teaBalance.toString(),
+          params,
+          balance: teaBalance,
+          decimals: await getDecimalsTEA(vault, vaultId),
         });
       }
-      console.log("TEA Balance for Vault", vaultId, "is", teaBalance);
+      console.log("TEA Balance for Vault", Number(vaultId), "is", teaBalance);
 
       // APE Balance (ERC20)
       const apeAddress = calculateApeAddress(vaultId);
-      console.log("APE address for Vault", vaultId, "is", apeAddress);
-      const apeBalance = await getERC20Balance(apeAddress, address);
+      console.log("APE address for Vault", Number(vaultId), "is", apeAddress);
+      const [apeBalance, apeDecimals] = await getERC20Balance(
+        apeAddress,
+        address
+      );
       if (apeBalance > 0n) {
         results.ape.push({
           vaultId: Number(vaultId),
-          collateral: params[1],
-          balance: apeBalance.toString(),
+          params,
+          balance: apeBalance,
+          decimals: Number(apeDecimals),
         });
       }
-      console.log("APE Balance for Vault", vaultId, "is", apeBalance);
+      console.log("APE Balance for Vault", Number(vaultId), "is", apeBalance);
 
       // SIR LP rewards
       const lperRewards = await vault.unclaimedRewards(vaultId, address);
-      results.sir.lper += lperRewards;
-      console.log("LP rewards for Vault", vaultId, "is", lperRewards);
+      results.sir.lper.push({
+        vaultId: Number(vaultId),
+        rewards: lperRewards,
+      });
+      // results.sir.lper[Number(vaultId)] = lperRewards; // Store by vaultId
+      console.log("LP rewards for Vault", Number(vaultId), "is", lperRewards);
     }
 
     // SIR positions
     results.sir.contributor = await sir.contributorUnclaimedSIR(address);
+    console.log(
+      "SIR contributor unclaimed rewards are",
+      results.sir.contributor
+    );
     const [unlocked, locked] = await sir.stakeOf(address);
-    results.sir.staked = locked;
+    results.sir.stakedLocked = locked;
+    results.sir.stakedUnlocked = unlocked;
     results.sir.dividends = await sir.unclaimedDividends(address);
 
     displayResults(results);
@@ -137,53 +154,236 @@ function calculateApeAddress(vaultId) {
   return ethers.dataSlice(ethers.keccak256(rlpEncoded), 12, 32);
 }
 
+async function getDecimalsTEA(vault, vaultId) {
+  const uri = await vault.uri(vaultId);
+  const encodedJson = uri.split(",")[1];
+  const decodedJson = decodeURIComponent(encodedJson);
+  const { decimals } = JSON.parse(decodedJson);
+  return decimals;
+}
+
 async function getERC20Balance(tokenAddress, userAddress) {
   const contract = new ethers.Contract(
     tokenAddress,
-    ["function balanceOf(address) view returns (uint256)"],
+    [
+      "function balanceOf(address) view returns (uint)",
+      "function decimals() view returns (uint8)",
+    ],
     provider
   );
-  return await contract.balanceOf(userAddress);
+  return [await contract.balanceOf(userAddress), await contract.decimals()];
 }
 
 function displayResults(results) {
   const container = document.getElementById("results");
   container.innerHTML = `
         <h3>Your Positions</h3>
-        ${renderSection("TEA Positions", results.tea)}
-        ${renderSection("APE Positions", results.ape)}
+        ${renderSection("TEA", results.tea)}
+        ${renderSection("APE", results.ape)}
         ${renderSirResults(results.sir)}
     `;
 }
 
-function renderSection(title, items) {
+function renderSection(type, items) {
   if (!items.length) return "";
   return `
-        <h4>${title}</h4>
-        <ul>
-            ${items
-              .map(
-                (item) => `
-                <li>Vault ${item.vaultId}: ${ethers.formatUnits(
-                  item.balance
-                )} (${item.collateral})</li>
+        <h4>${type} Positions</h4>
+        ${items
+          .map(
+            (item) => `
+              <button onclick="handleBurn(
+               '${ethers.getAddress(
+                 item.params[0]
+               )}', // Convert to checksum address
+              '${ethers.getAddress(
+                item.params[1]
+              )}', // Convert to checksum address
+              ${Number(item.params[2])}, // Convert to number
+              '${type}', 
+              '${item.balance.toString()}' // Pass as string
+            )">
+                    Burn ${ethers.formatUnits(
+                      item.balance,
+                      item.decimals
+                    )} ${type}-${item.vaultId}
+              </button>
             `
-              )
-              .join("")}
-        </ul>
+          )
+          .join("<br>")}
+    `;
+}
+function renderSirResults(sir) {
+  return `
+    <h4>SIR Positions</h4>
+        <button disabled>${ethers.formatUnits(
+          sir.stakedLocked,
+          12
+        )} Locked SIR</button>
+        <br>
+        ${
+          sir.stakedUnlocked > 0n
+            ? `
+            <button onclick="handleUnstake('${sir.stakedUnlocked.toString()}')">
+                ${ethers.formatUnits(sir.stakedUnlocked, 12)} Unlocked SIR
+            </button><br>
+            `
+            : ""
+        }
+        ${
+          sir.dividends > 0n
+            ? `
+            <button onclick="handleClaimDividends()">
+                Withdraw ${ethers.formatUnits(sir.dividends, 18)} ETH dividends
+            </button><br>
+            `
+            : ""
+        }
+        ${sir.lper
+          .map((lp) =>
+            lp.rewards > 0n
+              ? `
+                <button onclick="handleClaimLpRewards(${lp.vaultId})">
+                    Claim ${ethers.formatUnits(
+                      lp.rewards,
+                      12
+                    )} SIR from Vault-${lp.vaultId}
+                </button><br>
+              `
+              : ""
+          )
+          .join("")}
+        ${
+          sir.contributor > 0n
+            ? `
+                <button onclick="handleClaimContributor()">
+                    Claim ${ethers.formatUnits(
+                      sir.contributor,
+                      12
+                    )} SIR as Contributor
+                </button><br>
+            `
+            : ""
+        }
     `;
 }
 
-function renderSirResults(sir) {
-  return `
-        <h4>SIR Positions</h4>
-        <ul>
-            <li>Staked: ${ethers.formatUnits(sir.staked)}</li>
-            <li>Dividends: ${ethers.formatUnits(sir.dividends)} ETH</li>
-            <li>LP Rewards: ${ethers.formatUnits(sir.lper)}</li>
-            <li>Contributor Rewards: ${ethers.formatUnits(sir.contributor)}</li>
-        </ul>
-    `;
+// Transaction handlers
+async function handleBurn(
+  debtToken,
+  collateralToken,
+  leverageTier,
+  tokenType,
+  amount
+) {
+  try {
+    const signer = await provider.getSigner();
+    const vault = new ethers.Contract(
+      CONTRACTS.vault,
+      [
+        "function burn(bool, (address,address,int8), uint256) returns (uint144)",
+      ],
+      signer
+    );
+
+    console.log("About to Burn!");
+    const tx = await vault.burn(
+      tokenType === "APE", // isAPE boolean
+      [debtToken, collateralToken, leverageTier],
+      amount
+    );
+
+    await tx.wait();
+    alert("Burn successful!");
+  } catch (error) {
+    if (!isUserRejected(error)) {
+      showError(`Burn failed: ${error.message}`);
+    }
+  }
+}
+
+async function handleClaimLpRewards(vaultId) {
+  try {
+    const signer = await provider.getSigner();
+    const sir = new ethers.Contract(
+      CONTRACTS.sir,
+      ["function lPerMint(uint256 vaultId) returns (uint80)"],
+      signer
+    );
+
+    const tx = await sir.lPerMint(vaultId);
+    await tx.wait();
+    alert("LP rewards claimed!");
+  } catch (error) {
+    if (!isUserRejected(error)) {
+      showError(`Claim failed: ${error.message}`);
+    }
+  }
+}
+
+async function handleClaimContributor() {
+  try {
+    const signer = await provider.getSigner();
+    const sir = new ethers.Contract(
+      CONTRACTS.sir,
+      ["function contributorMint() returns (uint80)"],
+      signer
+    );
+
+    const tx = await sir.contributorMint();
+    await tx.wait();
+    alert("Contributor rewards claimed!");
+  } catch (error) {
+    if (!isUserRejected(error)) {
+      showError(`Claim failed: ${error.message}`);
+    }
+  }
+}
+
+async function handleUnstake(amount) {
+  try {
+    const signer = await provider.getSigner();
+    const sir = new ethers.Contract(
+      CONTRACTS.sir,
+      ["function unstake(uint80 amount)"],
+      signer
+    );
+
+    const tx = await sir.unstake(amount);
+    await tx.wait();
+    alert("Unstake successful!");
+  } catch (error) {
+    if (!isUserRejected(error)) {
+      showError(`Unstake failed: ${error.message}`);
+    }
+  }
+}
+
+async function handleClaimDividends() {
+  try {
+    const signer = await provider.getSigner();
+    const sir = new ethers.Contract(
+      CONTRACTS.sir,
+      ["function claim() returns (uint96)"],
+      signer
+    );
+
+    const tx = await sir.claim();
+    await tx.wait();
+    alert("Dividends claimed!");
+  } catch (error) {
+    if (!isUserRejected(error)) {
+      showError(`Claim failed: ${error.message}`);
+    }
+  }
+}
+
+function isUserRejected(error) {
+  return (
+    error.code === "ACTION_REJECTED" ||
+    error.code === 4001 ||
+    error.message.includes("user rejected") ||
+    error.message.includes("request rejected")
+  );
 }
 
 function showLoading(show) {
