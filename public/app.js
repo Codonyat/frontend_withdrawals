@@ -15,17 +15,20 @@ window.addEventListener("load", () => {
 async function connectWallet() {
   try {
     provider = new ethers.BrowserProvider(window.ethereum);
+    showLoading(true, "Awaiting wallet connection...");
     await provider.send("eth_requestAccounts", []);
     const signer = await provider.getSigner();
     scanPositions(await signer.getAddress());
   } catch (error) {
-    showError(`Connection failed: ${error.message}`);
+    if (!isUserRejected(error)) {
+      showError(`Connection failed: ${error.message}`);
+    }
   }
 }
 
 async function scanPositions(address) {
   try {
-    showLoading(true);
+    showLoading(true, "Initializing scan...");
 
     const results = {
       tea: [],
@@ -64,12 +67,14 @@ async function scanPositions(address) {
 
     // Scan vaults
     const numVaults = await vault.numberOfVaults();
+    showLoading(true, `Found ${numVaults} vaults to scan`);
 
-    // for (let vaultId = 1n; vaultId <= numVaults; vaultId++) {
-    for (let vaultId = 1n; vaultId <= 1; vaultId++) {
+    for (let vaultId = 1n; vaultId <= numVaults; vaultId++) {
+      showLoading(true, `Scanning Vault ${vaultId}`);
       const params = await vault.paramsById(vaultId);
 
       // TEA Balance (ERC1155)
+      showLoading(true, `Checking TEA balance in Vault ${vaultId}`);
       const teaBalance = await vault.balanceOf(address, vaultId);
       if (teaBalance > 0n) {
         results.tea.push({
@@ -82,6 +87,7 @@ async function scanPositions(address) {
       console.log("TEA Balance for Vault", Number(vaultId), "is", teaBalance);
 
       // APE Balance (ERC20)
+      showLoading(true, `Checking APE balance in Vault ${vaultId}`);
       const apeAddress = calculateApeAddress(vaultId);
       console.log("APE address for Vault", Number(vaultId), "is", apeAddress);
       const [apeBalance, apeDecimals] = await getERC20Balance(
@@ -99,6 +105,7 @@ async function scanPositions(address) {
       console.log("APE Balance for Vault", Number(vaultId), "is", apeBalance);
 
       // SIR LP rewards
+      showLoading(true, `Checking SIR LP rewards in Vault ${vaultId}`);
       const lperRewards = await vault.unclaimedRewards(vaultId, address);
       results.sir.lper.push({
         vaultId: Number(vaultId),
@@ -109,6 +116,7 @@ async function scanPositions(address) {
     }
 
     // SIR positions
+    showLoading(true, "Checking SIR positions...");
     results.sir.contributor = await sir.contributorUnclaimedSIR(address);
     console.log(
       "SIR contributor unclaimed rewards are",
@@ -224,7 +232,10 @@ function renderSirResults(sir) {
           sir.stakedUnlocked > 0n
             ? `
             <button onclick="handleUnstake('${sir.stakedUnlocked.toString()}')">
-                ${ethers.formatUnits(sir.stakedUnlocked, 12)} Unlocked SIR
+                Unstake ${ethers.formatUnits(
+                  sir.stakedUnlocked,
+                  12
+                )} Unlocked SIR
             </button><br>
             `
             : ""
@@ -386,11 +397,20 @@ function isUserRejected(error) {
   );
 }
 
-function showLoading(show) {
-  document.getElementById("loading").style.display = show ? "block" : "none";
-}
-
 function showError(message) {
   const container = document.getElementById("results");
   container.innerHTML = `<div style="color: red">${message}</div>`;
+}
+
+function showLoading(show, message = "") {
+  const loading = document.getElementById("loading");
+  const status = document.getElementById("scanning-status");
+
+  if (show) {
+    loading.style.display = "block";
+    status.textContent = message;
+  } else {
+    loading.style.display = "none";
+    status.textContent = "";
+  }
 }

@@ -5,10 +5,48 @@
     <script src="/ethers.min.js"></script>
     <script src="/app.js"></script>
     <link rel="icon" href="./images/favicon.ico" />
+    <style>
+      button {
+        width: 400px;
+        text-align: center;
+        margin: 4px 0;
+        cursor: pointer;
+      }
+
+      button[disabled] {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      #connect {
+        width: 120px;
+      }
+
+      body {
+        margin: 0;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        min-height: 100vh;
+      }
+
+      #results {
+        width: 100%;
+        max-width: 400px;
+      }
+
+      #scanning-status {
+        width: 400px;
+        text-align: left;
+      }
+    </style>
   </head>
   <body>
     <button id="connect">Connect Wallet</button>
-    <div id="loading" style="display: none">Scanning...</div>
+    <div id="loading" style="display: none">
+      <div id="scanning-status"></div>
+    </div>
     <div id="results"></div>
   </body>
 </html>
